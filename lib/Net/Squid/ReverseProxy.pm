@@ -4,7 +4,7 @@ use strict;
 use Carp qw/croak/;
 
 use vars qw/$VERSION/;
-$VERSION = '0.01';
+$VERSION = '0.02';
 
 sub new {
 
@@ -12,17 +12,23 @@ sub new {
     my %arg = @_;
     my $squid = $arg{'squid'};
     my $cfg = $arg{'squid_conf'};
+	my $version = $arg{'squid_version'};
 
     unless (-f $cfg && -w $cfg ) {
-	croak "squid config file doesn't exist or isn't writable";
+        croak "squid config file doesn't exist or isn't writable";
     }
 
     unless (-f $squid && -x $squid ) {
-	croak "squid program doesn't exist or isn't executable";
+        croak "squid program doesn't exist or isn't executable";
     }
+
+	unless (defined $version) {
+        croak "you must specify a version of squid";
+	}
 
     bless { 'squid' => $squid,
 	    'squid_conf' => $cfg,
+		'squid_version' => $version,
 	  }, $class;
 }
 
@@ -33,6 +39,7 @@ sub init_squid_for_reverseproxy {
 
     my $cfg = $self->{'squid_conf'};
     my $squid = $self->{'squid'};
+	my $version = $self->{'squid_version'};
 
     my $cache_mem = $arg{'cache_mem'} || 50;
     my $maximum_object_size = $arg{'maximum_object_size'} || 2048;
@@ -44,9 +51,9 @@ sub init_squid_for_reverseproxy {
         my $uid = (stat $arg{'cache_dir'})[4];
         my $user = (getpwuid $uid)[0];
 
-	if ($user ne 'nobody') {
-	    croak "init failed, $arg{'cache_dir'} must be owned by nobody";
-	} 
+        if ($user ne 'nobody') {
+            croak "init failed, $arg{'cache_dir'} must be owned by nobody";
+        } 
     }
 
     my $cache_dir = $arg{'cache_dir'} || '/tmp/squidcache';
@@ -55,20 +62,22 @@ sub init_squid_for_reverseproxy {
     $module_dir =~ s/\.pm$//;
 
     my @cfg;
-
     open HD, "$module_dir/squidcfg" or croak "can't open template file $!";
-
     while (<HD>) {
 
-	push @cfg,$_;
+        push @cfg,$_;
 
-	if (/ARG INPUT BEGIN/) {
-	    push @cfg,
-	      "cache_mem $cache_mem MB\n",
-	      "maximum_object_size $maximum_object_size KB\n",
-	      "maximum_object_size_in_memory $maximum_object_size_in_memory KB\n",
-	      "cache_dir ufs $cache_dir $cache_dir_size 16 256\n",
-	      "visible_hostname $visible_hostname\n";
+        if (/ARG INPUT BEGIN/) {
+            push @cfg,
+                "cache_mem $cache_mem MB\n",
+                "maximum_object_size $maximum_object_size KB\n",
+                "maximum_object_size_in_memory $maximum_object_size_in_memory KB\n",
+                "cache_dir ufs $cache_dir $cache_dir_size 16 256\n",
+                "visible_hostname $visible_hostname\n";
+
+	        if ( $version < 3.0 ) {
+		        push @cfg, "acl all src all\n";
+	        }
         }
     }
     close HD;
@@ -85,7 +94,7 @@ sub init_squid_for_reverseproxy {
     system "$squid -z >/dev/null 2>&1 && $squid -D";
 
     if ($? == 0) {
-	return 1;
+        return 1;
 
     } else {
 
@@ -93,7 +102,7 @@ sub init_squid_for_reverseproxy {
         print HDW for @oldcfg;
         close HDW;
 
-	croak "init failed, can't run 'squid -z' then 'squid -D'";
+        croak "init failed, can't run 'squid -z' then 'squid -D'";
     }
 }
 
@@ -240,7 +249,7 @@ Net::Squid::ReverseProxy - setup a HTTP reverse proxy with Squid
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 
 =head1 SYNOPSIS
@@ -249,7 +258,8 @@ Version 0.01
 
     my $squid = Net::Squid::ReverseProxy->new(
                      'squid' => '/path/to/squid',
-                     'squid_conf' => '/path/to/squid.conf');
+                     'squid_conf' => '/path/to/squid.conf',
+                     'squid_version' => '3.0');
 
     $squid->init_squid_for_reverseproxy;
     sleep 1;
@@ -273,15 +283,22 @@ Version 0.01
 =head2 new()
 
 Create an object, please specify the full path of both squid 
-executable program and squid config file.
+executable program and squid config file, with the big version of
+squid. Currently only Squid-3.0 and Squid-2.7 branch were tested.
 
    my $squid = Net::Squid::ReverseProxy->new(
                      'squid' => '/path/to/squid',
-                     'squid_conf' => '/path/to/squid.conf');
+                     'squid_conf' => '/path/to/squid.conf',
+                     'squid_version' => '3.0');
 
 Before using this module, you must have squid installed in
 the system. You could get the latest source from its official
-website squid-cache.org, then compile and install it.
+website squid-cache.org, then install it following the words in
+INSTALL document. For example,
+
+        % ./configure --prefix=/usr/local/squid
+        % make
+        # make install
 
 
 =head2 init_squid_for_reverseproxy()
