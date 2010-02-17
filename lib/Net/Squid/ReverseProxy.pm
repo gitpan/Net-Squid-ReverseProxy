@@ -4,42 +4,46 @@ use strict;
 use Carp qw/croak/;
 
 use vars qw/$VERSION/;
-$VERSION = '0.02';
+$VERSION = '0.03';
+
 
 sub new {
 
     my $class = shift;
     my %arg = @_;
-    my $squid = $arg{'squid'};
-    my $cfg = $arg{'squid_conf'};
-	my $version = $arg{'squid_version'};
 
-    unless (-f $cfg && -w $cfg ) {
+    unless (defined $arg{'squid_version'} &&
+            defined $arg{'squid_conf'} &&
+            defined $arg{'squid'} ) {
+        croak "the path to both squid and squid.conf as well as squid version are required";
+    }
+
+    unless (-f $arg{'squid_conf'} && -w $arg{'squid_conf'} ) {
         croak "squid config file doesn't exist or isn't writable";
     }
 
-    unless (-f $squid && -x $squid ) {
+    unless (-f $arg{'squid'} && -x $arg{'squid'} ) {
         croak "squid program doesn't exist or isn't executable";
     }
 
-	unless (defined $version) {
-        croak "you must specify a version of squid";
-	}
-
-    bless { 'squid' => $squid,
-	    'squid_conf' => $cfg,
-		'squid_version' => $version,
-	  }, $class;
+    bless \%arg, $class;
 }
 
-sub init_squid_for_reverseproxy {
+
+#
+# make an alias to init_reverseproxy
+#
+*init_squid_for_reverseproxy = \&init_reverseproxy;
+
+
+sub init_reverseproxy {
 
     my $self = shift;
     my %arg = @_;
 
     my $cfg = $self->{'squid_conf'};
     my $squid = $self->{'squid'};
-	my $version = $self->{'squid_version'};
+    my $version = $self->{'squid_version'};
 
     my $cache_mem = $arg{'cache_mem'} || 50;
     my $maximum_object_size = $arg{'maximum_object_size'} || 2048;
@@ -64,7 +68,6 @@ sub init_squid_for_reverseproxy {
     my @cfg;
     open HD, "$module_dir/squidcfg" or croak "can't open template file $!";
     while (<HD>) {
-
         push @cfg,$_;
 
         if (/ARG INPUT BEGIN/) {
@@ -75,9 +78,9 @@ sub init_squid_for_reverseproxy {
                 "cache_dir ufs $cache_dir $cache_dir_size 16 256\n",
                 "visible_hostname $visible_hostname\n";
 
-	        if ( $version < 3.0 ) {
-		        push @cfg, "acl all src all\n";
-	        }
+            if ( $version < 3.0 ) {
+                push @cfg, "acl all src all\n";
+	    }
         }
     }
     close HD;
@@ -91,7 +94,7 @@ sub init_squid_for_reverseproxy {
     close HDW;
 
     system "$squid -k kill >/dev/null 2>&1";
-    system "$squid -z >/dev/null 2>&1 && $squid -D";
+    system "$squid -z >/dev/null 2>&1 && $squid";
 
     if ($? == 0) {
         return 1;
@@ -102,9 +105,10 @@ sub init_squid_for_reverseproxy {
         print HDW for @oldcfg;
         close HDW;
 
-        croak "init failed, can't run 'squid -z' then 'squid -D'";
+        croak "init failed, can't run 'squid -z' and startup squid";
     }
 }
+
 
 sub add_dstdomain_proxy {
 
@@ -185,6 +189,7 @@ sub add_dstdomain_proxy {
     }
 }
 
+
 sub remove_dstdomain_proxy {
 
     my $self = shift;
@@ -198,7 +203,7 @@ sub remove_dstdomain_proxy {
     my @id;
     open HD,$cfg or croak $!;
     while(<HD>) {
-	if (/^acl\s+service_(\d+)\s+dstdomain\s+$domain/) {
+	if (/^acl\s+service_(\d+)\s+dstdomain\s+$domain$/) {
 	    push @id, $1;
 	}
     }
@@ -240,6 +245,107 @@ sub remove_dstdomain_proxy {
 }
 
 
+sub exists_dstdomain_proxy {
+
+    my $self = shift;
+    my $domain = shift || return;
+
+    $domain = quotemeta($domain);
+    my $cfg = $self->{'squid_conf'};
+    my $exist = 0;
+
+    open HD,$cfg or croak $!;
+    while (<HD>) {
+        if (/^acl\s+service_(\d+)\s+dstdomain\s+$domain$/) {
+            $exist = 1;
+            last;
+        }
+    }
+    close HD;
+
+    return $exist;
+}
+
+
+sub _get_dstdomain_sites {
+
+    my $self = shift;
+
+    my $cfg = $self->{'squid_conf'};
+    my %sites;
+    my %service;
+    my %peers;
+
+    open HD, $cfg or croak $!;
+    while(<HD>) {
+        if (/SITE BEGIN/) {
+            while(<HD>) {
+                last if /SITE END/;
+                chomp;
+
+                my @elem = split;
+
+                if ($elem[0] eq 'cache_peer_access') {
+                    push @{$service{$elem[3]}}, $elem[1];
+                }
+            }
+        }
+    }
+    close HD;
+                    
+    open HD, $cfg or croak $!;
+    for my $s (keys %service) {
+        my @lines = grep {/^acl\s+$s\s+/} <HD>;
+        my $line = shift @lines;
+        chomp $line;
+        $sites{$s} = (split/\s+/,$line)[-1];
+        seek(HD,0,0);
+    }
+    close HD;                
+
+    open HD, $cfg or croak $!;
+    for my $s (keys %service) {
+        for my $p (@{$service{$s}}) {
+            my @lines = grep {/name=$p\s+/} <HD>;
+            my $line = shift @lines;
+            chomp $line;
+            $peers{$p} = [ (split/\s+/,$line)[1,3,-1] ];
+            seek(HD,0,0);
+        }
+    }
+    close HD;
+
+    return \%service,\%sites,\%peers;
+}
+
+
+sub list_dstdomain_proxies {
+
+    my $self = shift;
+
+    my ($svr,$site,$peer) = $self->_get_dstdomain_sites();
+    my @exist;
+    
+    for my $s ( sort { (split/\_/,$a)[-1] <=> (split/\_/,$b)[-1] } keys %$site ) {
+        my @ip;
+        my $algor = '';
+        my $domain = $site->{$s};
+        my $original = $svr->{$s};
+
+        for my $name (@$original) {
+            push @ip, $peer->{$name}->[0] . ":" . $peer->{$name}->[1];
+            if ($peer->{$name}->[2] !~ /name=/) {
+                $algor = $peer->{$name}->[2];
+            }
+        }
+
+        push @exist, [$s,$domain,$algor,[@ip]];
+    }
+
+    return \@exist;
+}
+
+
 1;
 
 
@@ -249,7 +355,7 @@ Net::Squid::ReverseProxy - setup a HTTP reverse proxy with Squid
 
 =head1 VERSION
 
-Version 0.02
+Version 0.03
 
 
 =head1 SYNOPSIS
@@ -261,30 +367,35 @@ Version 0.02
                      'squid_conf' => '/path/to/squid.conf',
                      'squid_version' => '3.0');
 
-    $squid->init_squid_for_reverseproxy;
+    $squid->init_reverseproxy;
     sleep 1;
 
     $squid->add_dstdomain_proxy('dstdomain' => 'www.example.com',
-                           'original_server' => ['192.168.1.100'])
-            or die "can't add dstdomain\n";
+                           'original_server' => ['192.168.1.10'])
+            or die "can't add dstdomain";
 
-    $squid->add_dstdomain_proxy('dstdomain' => 'www.example.com',
-                          'original_server' => ['192.168.1.100',
-                                                '192.168.1.200:8080'],
+    $squid->add_dstdomain_proxy('dstdomain' => 'mail.example.com',
+                          'original_server' => ['192.168.1.20',
+                                                '192.168.1.30:8080'],
 			     'load_balance' => 'round-robin')
-            or die "can't add dstdomain\n";
+            or die "can't add dstdomain";
+
+    print "The dstdomain www.example.com exists? ";
+    print $squid->exists_dstdomain_proxy('www.example.com') ? "yes\n" : "no\n";
+
+    use Data::Dumper;
+    print Dumper $squid->list_dstdomain_proxies;
 
     $squid->remove_dstdomain_proxy('www.example.com')
-            or die "can't remove dstdomain\n";
-
+            or die "can't remove dstdomain";
 
 =head1 METHODS
 
 =head2 new()
 
-Create an object, please specify the full path of both squid 
-executable program and squid config file, with the big version of
-squid. Currently only Squid-3.0 and Squid-2.7 branch were tested.
+Create an object. Please specify the full path of both squid 
+executable program and squid config file, with the version number
+of squid. Currently squid-2.7, 3.0, 3.1 branches were tested.
 
    my $squid = Net::Squid::ReverseProxy->new(
                      'squid' => '/path/to/squid',
@@ -301,15 +412,18 @@ INSTALL document. For example,
         # make install
 
 
-=head2 init_squid_for_reverseproxy()
+=head2 init_reverseproxy()
 
 Warnning: the config file will be overwritten by this method, you 
 should execute the method only once at the first time of using this 
 module. It's used to initialize the setting for squid reverse proxy. 
 
-Could pass the arguments like below to this method as well:
+To keep backward compatibility, there is a method of
+init_squid_for_reverseproxy() which is an alias to this method.
 
-    $squid->init_squid_for_reverseproxy(
+You could pass the additional arguments like below to the method:
+
+    $squid->init_reverseproxy(
       'cache_mem' => 200,
       'maximum_object_size' => 4096,
       'maximum_object_size_in_memory' => 64,
@@ -333,8 +447,8 @@ visible_hostname: visiable hostname, default localhost.localdomain
 cache_dir: path to cache dir, default /tmp/squidcache
 
 
-After calling this method, you MUST sleep at least 1 second to wait for 
-squid finish starting up before any further operation.
+After calling this method, you MUST sleep at least one second to wait for 
+squid to finish starting up before any further operation.
 
 If initialized correctly, it will make squid run and listen on TCP port
 80 for HTTP requests. If initialized failed, you may check /tmp/cache.log
@@ -343,32 +457,52 @@ for details.
 
 =head2 add_dstdomain_proxy()
 
-Add a reverse proxy rule based on dstdomain (destination domain).
+Add a rule of reverseproxy based on dstdomain (destination domain).
 For example, you want to reverse-proxy the domain www.example.com,
-whose backend webserver is 192.168.1.100, then do:
+whose backend webserver is 192.168.1.10, then do:
 
     $squid->add_dstdomain_proxy('dstdomain' => 'www.example.com',
-                          'original_server' => ['192.168.1.100']);
+                          'original_server' => ['192.168.1.10']);
 
 Here 'dstdomain' means destination domain, 'original_server' means backend
-webserver. If you have two backend webservers, one is 192.168.1.100, whose 
-http port is 80 (the default), another is 192.168.1.200, whose http port is 
+webserver. If you have two backend webservers, one is 192.168.1.20, whose 
+http port is 80 (the default), another is 192.168.1.30, whose http port is 
 8080, then do:
 
     $squid->add_dstdomain_proxy('dstdomain' => 'www.example.com',
-                          'original_server' => ['192.168.1.100',
-                                                '192.168.1.200:8080'],
+                          'original_server' => ['192.168.1.20',
+                                                '192.168.1.30:8080'],
 			     'load_balance' => 'round-robin');
 
 Here 'load_balance' specifies an algorithm for balancing http requests among
 webservers. The most common used algorithms are round-robin and sourcehash.
-The latter is used for session persistence mostly. See squid.conf.default
-for details.
+The latter is used for session persistence mostly. See squid.conf's document
+for details. If you want all traffic go to the first webserver, and only when 
+the first webserver gets down, the traffic go to the second webserver,
+then don't specify a load_balance algorithm here.
+
+
+=head2 exists_dstdomain_proxy()
+
+Whether a reverseproxy rule for the specified destination domain exists.
+
+    $squid->exists_dstdomain_proxy('www.example.com');
+
+Returns 1 for exists, 0 for non-exists.
+
+
+=head2 list_dstdomain_proxies()
+
+List all reverseproxy rules in the config file. It returns a data structure
+of a reference to AoA, so you will dump it with Data::Dumper.
+
+    use Data::Dumper;
+    print Dumper $squid->list_dstdomain_proxies;
 
 
 =head2 remove_dstdomain_proxy()
 
-Remove reverse proxy rule(s) for the specified destination domain.
+Remove reverseproxy rule(s) for the specified destination domain.
 
     $squid->remove_dstdomain_proxy('www.example.com');
 
@@ -380,7 +514,8 @@ Jeff Pang <pangj@arcor.de>
 
 =head1 BUGS/LIMITATIONS
 
-If you have found bugs, please send mail to <pangj@arcor.de>
+If you have found bugs, please send email to <pangj@arcor.de>, I will
+appreciate it much.
 
 
 =head1 SUPPORT
@@ -391,10 +526,10 @@ You can find documentation for this module with the perldoc command.
 
 For the general knowledge of installing and setup squid, please reference
 documents and wiki on squid-cache.org, or subscribe to squid user's mailing
-list, or, you can email me in private. For Chinese you could read online the
-Chinese version of "Squid: The Definitive Guide" translated by me:
+list, or, you can email me in private. For Chinese you could download and
+read the Chinese version of "Squid: The Definitive Guide" translated by me:
 
-    http://home.arcor.de/mailerstar/jeff/squid/
+    http://squidcn.spaces.live.com/blog/cns!B49104BB65206A10!229.entry
 
 
 =head1 COPYRIGHT & LICENSE

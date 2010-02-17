@@ -9,6 +9,7 @@ hierarchy_stoplist cgi-bin ?
 access_log none
 cache_store_log none
 cache_log /tmp/cache.log
+pid_filename /tmp/squid.pid
 
 #-*- ARG INPUT BEGIN -*-
 #-*- ARG INPUT END -*-
