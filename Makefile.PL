@@ -4,9 +4,12 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile(
     NAME                => 'Net::Squid::ReverseProxy',
-    AUTHOR              => 'Jeff Pang <pangj@arcor.de>',
+    AUTHOR              => q{Jeff Pang <pangj@arcor.de>},
     VERSION_FROM        => 'lib/Net/Squid/ReverseProxy.pm',
     ABSTRACT_FROM       => 'lib/Net/Squid/ReverseProxy.pm',
+    ($ExtUtils::MakeMaker::VERSION >= 6.3002
+      ? ('LICENSE'=> 'perl')
+      : ()),
     PL_FILES            => {},
     PREREQ_PM => {
         'Test::More' => 0,

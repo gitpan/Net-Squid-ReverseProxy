@@ -1,10 +1,11 @@
 package Net::Squid::ReverseProxy;
 
+use 5.006;
 use strict;
 use Carp qw/croak/;
 
 use vars qw/$VERSION/;
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 
 sub new {
@@ -28,13 +29,6 @@ sub new {
 
     bless \%arg, $class;
 }
-
-
-#
-# make an alias to init_reverseproxy
-#
-*init_squid_for_reverseproxy = \&init_reverseproxy;
-
 
 sub init_reverseproxy {
 
@@ -65,9 +59,10 @@ sub init_reverseproxy {
     my $module_dir = $INC{'Net/Squid/ReverseProxy.pm'};
     $module_dir =~ s/\.pm$//;
 
-    my @cfg;
-    open HD, "$module_dir/squidcfg" or croak "can't open template file $!";
-    while (<HD>) {
+    my @cfg; my $fd;
+
+    open $fd, "<", "$module_dir/squidcfg" or croak "can't open template file $!";
+    while (<$fd>) {
         push @cfg,$_;
 
         if (/ARG INPUT BEGIN/) {
@@ -83,15 +78,17 @@ sub init_reverseproxy {
 	    }
         }
     }
-    close HD;
+    close $fd;
 
-    open HD, $cfg or croak $!;
-    my @oldcfg = <HD>;
-    close HD;
+    open $fd, "<", $cfg or croak $!;
+    my @oldcfg = <$fd>;
+    close $fd;
 
-    open HDW,">",$cfg or croak $!;
-    print HDW for @cfg;
-    close HDW;
+    my $fdw;
+
+    open $fdw,">",$cfg or croak $!;
+    print $fdw @cfg;
+    close $fdw;
 
     system "$squid -k kill >/dev/null 2>&1";
     system "$squid -z >/dev/null 2>&1 && $squid";
@@ -101,9 +98,9 @@ sub init_reverseproxy {
 
     } else {
 
-        open HDW,">",$cfg or croak $!;
-        print HDW for @oldcfg;
-        close HDW;
+        open $fdw,">",$cfg or croak $!;
+        print $fdw @oldcfg;
+        close $fdw;
 
         croak "init failed, can't run 'squid -z' and startup squid";
     }
@@ -123,27 +120,28 @@ sub add_dstdomain_proxy {
     my $algor = $arg{'load_balance'} || '';
 
     unless ($site_dst && @ip) {
-	return undef;
+	return;
     }
 
     my @newconf;
     my %cache_peer_access;
+    my $fd;
 
     $cache_peer_access{'origin'} = 'origin_0_0';
-    open HD, $cfg or croak $!;
-    while(<HD>) {
+    open $fd, "<", $cfg or croak $!;
+    while(<$fd>) {
         last if /SITE END/;
         if (/^cache_peer_access/) {
             $cache_peer_access{'origin'} = (split)[1];
         }
     }
-    close HD;
+    close $fd;
 
     my $idmax = (split /\_/, $cache_peer_access{'origin'})[-2];
     $idmax++;
 
-    open HD, $cfg or croak $!;
-    while(<HD>) {
+    open $fd, "<", $cfg or croak $!;
+    while(<$fd>) {
 
         if (/SITE END/) {
             my $int = 1;
@@ -164,25 +162,27 @@ sub add_dstdomain_proxy {
 
         push @newconf,$_;
     }
-    close HD;
+    close $fd;
 
-    open HD, $cfg or croak $!;
-    my @oldcfg = <HD>;
-    close HD;
+    open $fd, "<", $cfg or croak $!;
+    my @oldcfg = <$fd>;
+    close $fd;
 
-    open HDW, ">", $cfg or croak $!;
-    print HDW for @newconf;
-    close HDW;
+    my $fdw;
+
+    open $fdw, ">", $cfg or croak $!;
+    print $fdw @newconf;
+    close $fdw;
 
     my @err = `$squid -k reconfig 2>&1`;
     if (@err) {
 
-        open HDW,">",$cfg or croak $!;
-        print HDW for @oldcfg;
-        close HDW;
+        open $fdw,">",$cfg or croak $!;
+        print $fdw @oldcfg;
+        close $fdw;
 
 	system "$squid -k reconfig >/dev/null 2>&1";
-        return undef;
+        return;
 
     } else {
         return 1;
@@ -200,18 +200,19 @@ sub remove_dstdomain_proxy {
 
     $domain = quotemeta($domain);
 
-    my @id;
-    open HD,$cfg or croak $!;
-    while(<HD>) {
+    my @id; my $fd;
+
+    open $fd, "<", $cfg or croak $!;
+    while(<$fd>) {
 	if (/^acl\s+service_(\d+)\s+dstdomain\s+$domain$/) {
 	    push @id, $1;
 	}
     }
-    close HD;
+    close $fd;
 
     my @cfg;
-    open HD,$cfg or croak $!;
-    while(<HD>) {
+    open $fd, "<", $cfg or croak $!;
+    while(<$fd>) {
 	my $next = 0;
 	for my $id (@id) {
 	    $next=1 if (/origin_${id}_/ || /service_${id}\s+/);
@@ -219,25 +220,27 @@ sub remove_dstdomain_proxy {
 	next if $next;
         push @cfg,$_;
     }
-    close HD;
+    close $fd;
     
-    open HD, $cfg or croak $!;
-    my @oldcfg = <HD>;
-    close HD;
+    open $fd, "<", $cfg or croak $!;
+    my @oldcfg = <$fd>;
+    close $fd;
 
-    open HDW, ">", $cfg or croak $!;
-    print HDW for @cfg;
-    close HDW;
+    my $fdw;
+
+    open $fdw, ">", $cfg or croak $!;
+    print $fdw @cfg;
+    close $fdw;
 
     my @err = `$squid -k reconfig 2>&1`;
     if (@err) {
 
-        open HDW,">",$cfg or croak $!;
-        print HDW for @oldcfg;
-        close HDW;
+        open $fdw,">",$cfg or croak $!;
+        print $fdw @oldcfg;
+        close $fdw;
 
 	system "$squid -k reconfig >/dev/null 2>&1";
-        return undef;
+        return;
 
     } else {
         return 1;
@@ -253,15 +256,16 @@ sub exists_dstdomain_proxy {
     $domain = quotemeta($domain);
     my $cfg = $self->{'squid_conf'};
     my $exist = 0;
+    my $fd;
 
-    open HD,$cfg or croak $!;
-    while (<HD>) {
+    open $fd,"<",$cfg or croak $!;
+    while (<$fd>) {
         if (/^acl\s+service_(\d+)\s+dstdomain\s+$domain$/) {
             $exist = 1;
             last;
         }
     }
-    close HD;
+    close $fd;
 
     return $exist;
 }
@@ -275,11 +279,12 @@ sub _get_dstdomain_sites {
     my %sites;
     my %service;
     my %peers;
+    my $fd;
 
-    open HD, $cfg or croak $!;
-    while(<HD>) {
+    open $fd, "<", $cfg or croak $!;
+    while(<$fd>) {
         if (/SITE BEGIN/) {
-            while(<HD>) {
+            while(<$fd>) {
                 last if /SITE END/;
                 chomp;
 
@@ -291,29 +296,29 @@ sub _get_dstdomain_sites {
             }
         }
     }
-    close HD;
+    close $fd;
                     
-    open HD, $cfg or croak $!;
+    open $fd, "<", $cfg or croak $!;
     for my $s (keys %service) {
-        my @lines = grep {/^acl\s+$s\s+/} <HD>;
+        my @lines = grep {/^acl\s+$s\s+/} <$fd>;
         my $line = shift @lines;
         chomp $line;
         $sites{$s} = (split/\s+/,$line)[-1];
-        seek(HD,0,0);
+        seek($fd,0,0);
     }
-    close HD;                
+    close $fd;                
 
-    open HD, $cfg or croak $!;
+    open $fd, "<", $cfg or croak $!;
     for my $s (keys %service) {
         for my $p (@{$service{$s}}) {
-            my @lines = grep {/name=$p\s+/} <HD>;
+            my @lines = grep {/name=$p\s+/} <$fd>;
             my $line = shift @lines;
             chomp $line;
             $peers{$p} = [ (split/\s+/,$line)[1,3,-1] ];
-            seek(HD,0,0);
+            seek($fd,0,0);
         }
     }
-    close HD;
+    close $fd;
 
     return \%service,\%sites,\%peers;
 }
@@ -355,7 +360,7 @@ Net::Squid::ReverseProxy - setup a HTTP reverse proxy with Squid
 
 =head1 VERSION
 
-Version 0.03
+Version 0.04
 
 
 =head1 SYNOPSIS
